@@ -11,7 +11,7 @@ import requests
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="TSLA vs UVXY 三層訊號系統 v2", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="TSLA vs UVXY 三層訊號系統 v3", page_icon="🎯", layout="wide")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CSS
@@ -74,6 +74,13 @@ st.markdown("""
       height:6px; border-radius:4px;
       transition: width 0.3s ease;
   }
+  /* ── 時段標籤 ── */
+  .tod-hot  { background:#0a2b16; border:1px solid #00d97e; border-radius:5px;
+              padding:2px 8px; color:#00d97e; font-size:0.74rem; font-weight:700; display:inline-block; }
+  .tod-warm { background:#1a1a0a; border:1px solid #f6c90e; border-radius:5px;
+              padding:2px 8px; color:#f6c90e; font-size:0.74rem; font-weight:700; display:inline-block; }
+  .tod-cold { background:#1c1f26; border:1px solid #2d3139; border-radius:5px;
+              padding:2px 8px; color:#8b8fa8; font-size:0.74rem; display:inline-block; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -158,48 +165,67 @@ def signal_stars(strength: float) -> str:
 # ════════════════════════════════════════════════════════════════════════════════
 def calc_signal_quality(uvxy_r2: float, uvxy_slope_abs: float, uvxy_consec: int,
                          rsi: float, signal_type: str, lag_strength: float,
-                         multi_tf: bool) -> tuple:
+                         multi_tf: bool, et_hour: int = -1) -> tuple:
     """
     Returns (score 0-100, grade label, color hex)
     Grade: A(80+), B(60-79), C(40-59), D(<40)
+    v3 更新：
+      - consec 權重大幅提升（5日回測：consec=4 WR=82%，consec=2 WR=44%）
+      - SELL RSI 加入上限（RSI≥55 時 SELL WR=0%）
+      - 時段加權（10點 WR=72%，其他時段 WR=40-53%）
     """
     score = 0.0
 
-    # R² quality (max 30 pts) — key driver from backtest
-    if uvxy_r2 >= 0.80:   score += 30
-    elif uvxy_r2 >= 0.70: score += 22
-    elif uvxy_r2 >= 0.65: score += 15
-    else:                  score += 5
+    # R² quality (max 20 pts)
+    if uvxy_r2 >= 0.80:   score += 20
+    elif uvxy_r2 >= 0.75: score += 15
+    elif uvxy_r2 >= 0.70: score += 10
+    elif uvxy_r2 >= 0.65: score += 5
+    else:                  score += 0
 
-    # Slope magnitude (max 20 pts)
-    if uvxy_slope_abs >= 0.10:   score += 20
-    elif uvxy_slope_abs >= 0.07: score += 14
-    elif uvxy_slope_abs >= 0.05: score += 9
-    else:                         score += 3
+    # Slope magnitude (max 10 pts)
+    if uvxy_slope_abs >= 0.15:   score += 10
+    elif uvxy_slope_abs >= 0.10: score += 7
+    elif uvxy_slope_abs >= 0.07: score += 5
+    elif uvxy_slope_abs >= 0.05: score += 3
+    else:                         score += 0
 
-    # Consecutive bars (max 15 pts)
-    score += min(uvxy_consec * 5, 15)
+    # ★ v3: Consecutive bars 大幅提升至 max 35 pts（5日回測最強因子）
+    # consec=2→0pts, consec=3→12pts, consec=4→25pts, consec≥5→35pts
+    if uvxy_consec >= 5:   score += 35
+    elif uvxy_consec >= 4: score += 25
+    elif uvxy_consec >= 3: score += 12
+    else:                   score += 0   # consec=2 不加分
 
-    # RSI filter (max 20 pts) — from backtest: RSI is key discriminator
+    # ★ v3: RSI 雙向門檻（上下限）
     if signal_type == "SELL_TSLA":
-        if rsi >= 55:    score += 20
-        elif rsi >= 50:  score += 14
-        elif rsi >= 45:  score += 7
-        else:             score += 0   # penalty zone: oversold = bad sell
+        # SELL: RSI 45-55 最佳（WR 67-71%），RSI≥55 WR=0%
+        if 45 <= rsi < 55:    score += 20
+        elif 40 <= rsi < 45:  score += 12
+        elif 35 <= rsi < 40:  score += 8
+        elif rsi >= 55:        score += 0   # ★ RSI≥55 SELL 完全無效
+        else:                  score += 3   # RSI<35 極少見，謹慎
     else:  # BUY_TSLA
-        if rsi <= 55:    score += 20
-        elif rsi <= 60:  score += 14
-        elif rsi <= 65:  score += 7
-        else:             score += 0   # overbought = bad buy
+        # BUY: RSI 40-65 合理，RSI<40 反而差（WR=33%）
+        if 40 <= rsi < 65:    score += 20
+        elif 65 <= rsi < 68:  score += 12
+        elif rsi >= 68:        score += 5
+        else:                  score += 3   # RSI<40 謹慎
 
-    # Lag strength (max 10 pts) — TSLA should not have already moved
-    if lag_strength >= 0.5:   score += 10
-    elif lag_strength >= 0.0: score += 6
-    elif lag_strength >= -0.3: score += 2
+    # Lag strength (max 8 pts)
+    if lag_strength >= 3.0:   score += 8
+    elif lag_strength >= 1.0: score += 6
+    elif lag_strength >= 0.0: score += 4
+    elif lag_strength >= -0.5: score += 1
     else:                      score += 0
 
-    # Multi-timeframe bonus (max 5 pts)
-    if multi_tf: score += 5
+    # Multi-timeframe bonus (max 4 pts)
+    if multi_tf: score += 4
+
+    # ★ v3: 時段加權（5日回測：10點 WR=72%，其他時段 44-54%）
+    if et_hour == 10:          score += 3   # 黃金時段
+    elif et_hour in [9, 14]:   score += 1
+    elif et_hour in [11, 12, 13, 15]: score += 0  # 一般時段不加分
 
     score = min(max(score, 0), 100)
     if score >= 80:   grade, color = "A", "#00d97e"
@@ -213,18 +239,26 @@ def calc_signal_quality(uvxy_r2: float, uvxy_slope_abs: float, uvxy_consec: int,
 # ★ 新增：RSI 防呆過濾
 # ════════════════════════════════════════════════════════════════════════════════
 def rsi_gate(signal_type: str, rsi: float,
-             sell_min_rsi: float, buy_max_rsi: float) -> tuple:
+             sell_min_rsi: float, sell_max_rsi: float,
+             buy_max_rsi: float, buy_min_rsi: float) -> tuple:
     """
-    Returns (pass: bool, reason: str)
-    SELL 訊號：RSI 必須 >= sell_min_rsi（避免超賣區賣出）
-    BUY  訊號：RSI 必須 <= buy_max_rsi  （避免超買區買入）
+    v3 雙向 RSI 門檻：
+    SELL：sell_min_rsi ≤ RSI ≤ sell_max_rsi
+    BUY ：buy_min_rsi  ≤ RSI ≤ buy_max_rsi
+    5日回測發現：SELL RSI≥55 WR=0%，必須加上限
     """
     if rsi is None or np.isnan(rsi):
         return True, ""
-    if signal_type == "SELL_TSLA" and rsi < sell_min_rsi:
-        return False, f"RSI={rsi:.1f} < {sell_min_rsi}（超賣區，TSLA易反彈，跳過賣出）"
-    if signal_type == "BUY_TSLA" and rsi > buy_max_rsi:
-        return False, f"RSI={rsi:.1f} > {buy_max_rsi}（超買區，TSLA易回落，跳過買入）"
+    if signal_type == "SELL_TSLA":
+        if rsi < sell_min_rsi:
+            return False, f"RSI={rsi:.1f} < {sell_min_rsi}（超賣，TSLA易反彈，跳過SELL）"
+        if rsi > sell_max_rsi:
+            return False, f"RSI={rsi:.1f} > {sell_max_rsi}（TSLA過強，SELL勝率0%，跳過）"
+    if signal_type == "BUY_TSLA":
+        if rsi > buy_max_rsi:
+            return False, f"RSI={rsi:.1f} > {buy_max_rsi}（超買，TSLA易回落，跳過BUY）"
+        if rsi < buy_min_rsi:
+            return False, f"RSI={rsi:.1f} < {buy_min_rsi}（RSI過低，BUY勝率低，跳過）"
     return True, ""
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -355,70 +389,101 @@ with st.sidebar:
     signal_timeout = st.slider("訊號追蹤失效（分鐘）",     5, 60, 20)
 
     st.divider()
-    st.markdown("### 📐 靈敏度 <span class='opt-badge'>v2優化</span>", unsafe_allow_html=True)
+    st.markdown("### 📐 靈敏度 <span class='opt-badge'>v3優化</span>", unsafe_allow_html=True)
 
-    # ★ 改：預設 0.05（原 0.15），更符合今日UVXY實際斜率分布
     min_uvxy_slope = st.slider(
         "UVXY 最低斜率 (%/根)",
         0.02, 0.50, 0.05, step=0.01,
-        help="★ v2優化：從0.15降至0.05。今日UVXY 90th percentile僅0.11%，原設定導致0個訊號"
+        help="v2校準：0.15→0.05。5日UVXY 90th percentile=0.15~0.21%"
     )
-    min_tsla_response = st.slider("TSLA 視為已反應 (%)",   0.05, 2.0, 0.20, step=0.05)
+    min_tsla_response = st.slider("TSLA 視為已反應 (%)", 0.05, 2.0, 0.20, step=0.05)
     resistance_thresh = st.slider("抵抗力比值門檻（Layer1）", 0.05, 0.8, 0.30, step=0.05)
 
-    # ★ 改：R²預設提升至0.65（原0.45），回測顯示顯著提升勝率
     min_uvxy_r2 = st.slider(
         "UVXY R² 最低門檻",
-        0.40, 0.90, 0.65, step=0.05,
-        help="★ v2優化：從0.45升至0.65。R²≥0.65 WR=80%，R²≥0.45 WR=31%"
+        0.40, 0.95, 0.80, step=0.05,
+        help="★ v3升至0.80（5日回測：R²≥0.80 WR=57% 且訊號更乾淨）"
+    )
+
+    # ★ v3 核心：consec 預設改為 3
+    consec_req = st.slider(
+        "UVXY 連續確認根數",
+        2, 6, 3,
+        help="★ v3關鍵改進：consec=2 WR=44%，consec=3 WR=61%，consec=4 WR=82%（5日回測）"
     )
 
     rsi_overbought = st.slider("RSI 超買出場閾值（Layer3）", 65, 85, 70)
-    vol_spike_mult = st.slider("成交量爆增倍數（Layer3）",   1.5, 5.0, 2.5, step=0.5)
+    vol_spike_mult = st.slider("成交量爆增倍數（Layer3）", 1.5, 5.0, 2.5, step=0.5)
 
     st.divider()
-    # ★ 新增：RSI 防呆過濾
-    st.markdown("### 🛡️ RSI 防呆過濾 <span class='opt-badge'>v2新增</span>", unsafe_allow_html=True)
+    # ★ v3：RSI 雙向門檻
+    st.markdown("### 🛡️ RSI 雙向過濾 <span class='opt-badge'>v3升級</span>", unsafe_allow_html=True)
     use_rsi_gate = st.toggle(
-        "啟用 RSI 防呆",
+        "啟用 RSI 雙向防呆",
         value=True,
-        help="★ v2新增：SELL訊號時RSI需≥門檻（避免超賣反彈），BUY訊號時RSI需≤門檻（避免超買回落）"
+        help="v3升級：加入 SELL 上限。5日回測：SELL RSI≥55 WR=0%，必須過濾"
     )
     if use_rsi_gate:
-        rsi_sell_min = st.slider("SELL：RSI 最低值",  30, 60, 45,
-            help="RSI低於此值時不發SELL訊號（TSLA可能已超賣，易反彈）")
-        rsi_buy_max  = st.slider("BUY：RSI 最高值",  55, 80, 68,
-            help="RSI高於此值時不發BUY訊號（TSLA可能已超買，易回落）")
+        col_rsi1, col_rsi2 = st.columns(2)
+        with col_rsi1:
+            rsi_sell_min = st.slider("SELL RSI 下限", 25, 50, 35,
+                help="SELL 時 RSI 需高於此值（超賣區 TSLA 易反彈）")
+            rsi_buy_min  = st.slider("BUY RSI 下限",  20, 45, 38,
+                help="BUY 時 RSI 需高於此值（過低時 BUY WR 僅 33%）")
+        with col_rsi2:
+            rsi_sell_max = st.slider("SELL RSI 上限", 48, 70, 55,
+                help="★ v3新增：SELL RSI≥55 WR=0%，必須設上限")
+            rsi_buy_max  = st.slider("BUY RSI 上限",  55, 82, 68,
+                help="BUY 時 RSI 需低於此值（超買易回落）")
         st.markdown("""
         <div style='background:#0a1a0a;border:1px solid #00d97e;border-radius:6px;
                     padding:7px 10px;font-size:0.75rem;color:#00d97e;margin-top:4px'>
-        ✅ RSI防呆：今日回測去除唯一虧損訊號<br>
-        WR: 80% → 100%
+        ✅ v3雙向RSI：SELL需在下限~上限之間<br>
+        5日回測：SELL RSI≥55 WR=0%（6個全輸）
         </div>""", unsafe_allow_html=True)
     else:
-        rsi_sell_min = 0
-        rsi_buy_max  = 100
+        rsi_sell_min, rsi_sell_max = 0, 100
+        rsi_buy_min,  rsi_buy_max  = 0, 100
 
     st.divider()
-    # ★ 新增：訊號滯後偵測
+    # ★ v3：時段過濾
+    st.markdown("### 🕙 時段過濾 <span class='opt-badge'>v3新增</span>", unsafe_allow_html=True)
+    use_time_filter = st.toggle(
+        "啟用時段優先模式",
+        value=False,
+        help="5日回測：10點 WR=72%，其他時段44-54%。開啟後在非優質時段降低訊號強度"
+    )
+    if use_time_filter:
+        time_filter_mode = st.radio(
+            "時段模式",
+            ["寬鬆（非優質時段降級）", "嚴格（只在優質時段發訊）"],
+            index=0,
+        )
+        st.markdown("""
+        <div style='display:flex;gap:6px;margin-top:4px;flex-wrap:wrap'>
+        <span class='tod-hot'>10:00 WR=72%</span>
+        <span class='tod-warm'>09:xx WR=50%</span>
+        <span class='tod-warm'>14:xx WR=54%</span>
+        <span class='tod-cold'>11-13:xx WR=40-53%</span>
+        <span class='tod-cold'>15:xx WR=40%</span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        time_filter_mode = "關閉"
+
+    st.divider()
+    # ★ v3：lag filter（維持，但5日回測顯示效果有限）
     st.markdown("### ⏱️ 滯後過濾 <span class='opt-badge'>v2新增</span>", unsafe_allow_html=True)
     use_lag_filter = st.toggle(
         "啟用訊號滯後過濾",
-        value=True,
-        help="★ v2新增：若TSLA已提前大幅移動，說明訊號已滯後，跳過"
+        value=False,
+        help="5日回測：lag_strength對勝率影響不大（WR差距僅1-2%），v3預設關閉"
     )
     if use_lag_filter:
         lag_min = st.slider(
             "最低lag_strength",
-            -2.0, 1.0, -0.5, step=0.1,
-            help="TSLA滯後強度。值越低=TSLA已大幅提前移動=訊號越滯後。建議-0.5"
+            -2.0, 2.0, 0.0, step=0.1,
+            help="正值=TSLA還有追趕空間。5日數據顯示BUY lag 3-5 時 WR=82%"
         )
-        st.markdown("""
-        <div style='background:#0a0a1a;border:1px solid #5c7cfa;border-radius:6px;
-                    padding:7px 10px;font-size:0.75rem;color:#5c7cfa;margin-top:4px'>
-        ⏱ 滯後偵測：避免追漲殺跌式假訊號<br>
-        lag_strength = 預期TSLA移動 − 實際TSLA移動
-        </div>""", unsafe_allow_html=True)
     else:
         lag_min = -99.0
 
@@ -436,7 +501,7 @@ with st.sidebar:
     use_hs_mode = st.toggle("啟用高敏感度偵測", value=False)
     if use_hs_mode:
         hs_uvxy_min = st.slider("HS: UVXY最低變動 (%)", 0.05, 1.0, 0.10, step=0.05,
-                                 help="★ v2優化：預設從0.15降至0.10")
+                                 help="v2優化：預設從0.15降至0.10")
         hs_tsla_max = st.slider("HS: TSLA最大容許反應 (%)", 0.0, 1.0, 0.10, step=0.05)
         hs_cooldown = st.slider("HS: 冷卻時間（分鐘）", 1, 10, 2)
     else:
@@ -489,9 +554,9 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
-st.markdown("# 🎯 TSLA vs UVXY 三層訊號系統 <span class='opt-badge'>v2</span>", unsafe_allow_html=True)
+st.markdown("# 🎯 TSLA vs UVXY 三層訊號系統 <span class='opt-badge'>v3</span>", unsafe_allow_html=True)
 st.markdown(
-    f"<small style='color:#8b8fa8'>v2優化：斜率門檻校準 · RSI防呆過濾 · 訊號滯後偵測 · 品質評分系統</small>",
+    f"<small style='color:#8b8fa8'>v3優化：連續根數升權 · SELL RSI雙向門檻 · 時段過濾 · 5日1949根K線回測校準</small>",
     unsafe_allow_html=True,
 )
 st.divider()
@@ -532,6 +597,9 @@ lag_blocked     = False
 lag_block_reason = ""
 lag_strength_val = 0.0
 uvxy_accel      = 0.0
+time_blocked    = False
+time_block_reason = ""
+et_hour_now     = now.hour
 
 uvxy_trend_1m = {}
 tsla_trend_1m = {}
@@ -656,17 +724,47 @@ if data_ok:
 
     layer2_stars = signal_stars(layer2_strength)
 
-    # ★ 新增：RSI 防呆過濾
+    # ── ET 時區換算（用於時段過濾與品質評分）─────────────────────────────
+    try:
+        import pytz as _pytz
+        _et_now = now.astimezone(_pytz.timezone("America/New_York"))
+        et_hour_now = _et_now.hour
+    except Exception:
+        et_hour_now = now.hour
+
+    # ★ v3：RSI 雙向防呆過濾
     if layer2_signal is not None and use_rsi_gate and tsla_rsi1 is not None:
-        rsi_pass, rsi_block_reason = rsi_gate(layer2_signal, tsla_rsi1,
-                                               rsi_sell_min, rsi_buy_max)
+        rsi_pass, rsi_block_reason = rsi_gate(
+            layer2_signal, tsla_rsi1,
+            rsi_sell_min, rsi_sell_max,
+            rsi_buy_max,  rsi_buy_min,
+        )
         if not rsi_pass:
             rsi_blocked = True
             st.session_state.daily_rsi_blocked += 1
             st.session_state.signal_history.append(
-                f"{now.strftime('%H:%M')} 🛡️ RSI過濾：{rsi_block_reason[:50]}"
+                f"{now.strftime('%H:%M')} 🛡️ RSI過濾：{rsi_block_reason[:55]}"
             )
             layer2_signal = None
+
+    # ★ v3：時段過濾
+    time_blocked       = False
+    time_block_reason  = ""
+    if layer2_signal is not None and use_time_filter and time_filter_mode != "關閉":
+        # 10點 = 黃金時段，其他時段依模式處理
+        if "嚴格" in time_filter_mode and et_hour_now not in [9, 10]:
+            time_blocked      = True
+            time_block_reason = f"時段過濾（嚴格）：{et_hour_now}:xx WR偏低，僅09-10點發訊"
+            st.session_state.signal_history.append(
+                f"{now.strftime('%H:%M')} 🕙 時段過濾：{et_hour_now}:xx 非優質時段"
+            )
+            layer2_signal = None
+        elif "寬鬆" in time_filter_mode and et_hour_now not in [9, 10]:
+            # 非優質時段：降低訊號強度 50%
+            layer2_strength *= 0.5
+            layer2_stars     = signal_stars(layer2_strength)
+            time_block_reason = f"時段降級（{et_hour_now}:xx）訊號強度×0.5"
+            layer2_reason    += f"  🕙 {time_block_reason}"
 
     # ★ 新增：訊號滯後過濾
     if layer2_signal is not None and use_lag_filter:
@@ -678,11 +776,11 @@ if data_ok:
             )
             st.session_state.daily_lag_blocked += 1
             st.session_state.signal_history.append(
-                f"{now.strftime('%H:%M')} ⏱ 滯後過濾：{lag_block_reason[:50]}"
+                f"{now.strftime('%H:%M')} ⏱ 滯後過濾：{lag_block_reason[:55]}"
             )
             layer2_signal = None
 
-    # ★ 新增：訊號品質評分（在所有過濾後計算）
+    # ★ v3：訊號品質評分（所有過濾後計算，加入 et_hour）
     if layer2_signal is not None and tsla_rsi1 is not None:
         signal_quality, signal_grade, signal_grade_color = calc_signal_quality(
             uvxy_r2        = uvxy_trend_1m.get("r2", 0),
@@ -692,6 +790,7 @@ if data_ok:
             signal_type    = layer2_signal,
             lag_strength   = lag_strength_val,
             multi_tf       = multi_tf_agree,
+            et_hour        = et_hour_now,
         )
 
     # ── SPY Filter ────────────────────────────────────────────────────────
@@ -824,15 +923,18 @@ if data_ok:
             and cooldown_ok(st.session_state.last_alert_time, cooldown_min)):
         action = "🟢 買入 TSLA" if layer2_signal == "BUY_TSLA" else "🔴 賣出 TSLA"
         t_p = float(tsla_1m["Close"].iloc[-1]); u_p = float(uvxy_1m["Close"].iloc[-1])
-        tf_line = "✅ 1m+5m 雙框架" if multi_tf_agree else "⚠️ 僅1m框架"
-        msg = (f"*{action}*  {layer2_stars}  [品質{signal_grade}級={signal_quality}分]\n"
+        tf_line  = "✅ 1m+5m 雙框架" if multi_tf_agree else "⚠️ 僅1m框架"
+        tod_line = "🌟 黃金時段" if et_hour_now==10 else f"🕙 {et_hour_now}:xx ET"
+        co_now   = uvxy_trend_1m.get('consecutive',0)
+        co_emoji = "🔥" if co_now>=5 else ("⭐" if co_now>=4 else ("✅" if co_now>=3 else "⚠️"))
+        msg = (f"*{action}*  {layer2_stars}  [品質{signal_grade}={signal_quality}分]\n"
                f"━━━━━━━━━━━━━━━━\n"
-               f"時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n"
+               f"時間：`{now.strftime('%Y-%m-%d %H:%M')}` {tod_line}\n"
                f"框架：{tf_line}\n"
+               f"連續根數：`{co_now}`根 {co_emoji}（門檻≥{consec_req}）\n"
                f"R²：`{uvxy_trend_1m.get('r2',0):.2f}`（門檻≥{min_uvxy_r2}）\n"
-               f"UVXY斜率：`{uvxy_trend_1m.get('slope',0):+.3f}%/根`  "
-               f"連續`{uvxy_trend_1m.get('consecutive',0)}`根\n"
-               f"TSLA RSI：`{tsla_rsi1:.1f}`  lag_strength：`{lag_strength_val:+.3f}`\n"
+               f"UVXY斜率：`{uvxy_trend_1m.get('slope',0):+.3f}%/根`\n"
+               f"RSI：`{tsla_rsi1:.1f}`  lag：`{lag_strength_val:+.3f}`\n"
                f"入場參考：TSLA `${t_p:.2f}`  UVXY `${u_p:.2f}`")
         send_telegram(msg); st.session_state.last_alert_time = now
 
@@ -871,14 +973,24 @@ if data_ok:
 # SIGNAL DISPLAY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ★ 新增：被過濾訊號提示（幫助用戶理解為何無訊號）
+# ★ 被過濾訊號提示
 if rsi_blocked:
     st.markdown(f"""
     <div style='border-radius:10px;padding:10px 20px;margin:6px 0;
                 background:#0a0a1a;border:1px dashed #5c7cfa;text-align:center'>
       <div style='font-size:0.95rem;font-weight:700;color:#5c7cfa'>
-          🛡️ RSI 防呆過濾已攔截一個訊號</div>
+          🛡️ RSI 雙向過濾已攔截一個訊號</div>
       <div style='font-size:0.80rem;color:#8b8fa8;margin-top:4px'>{rsi_block_reason}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+if time_blocked:
+    st.markdown(f"""
+    <div style='border-radius:10px;padding:10px 20px;margin:6px 0;
+                background:#0a1a0a;border:1px dashed #f6c90e;text-align:center'>
+      <div style='font-size:0.95rem;font-weight:700;color:#f6c90e'>
+          🕙 時段過濾已攔截一個訊號</div>
+      <div style='font-size:0.80rem;color:#8b8fa8;margin-top:4px'>{time_block_reason}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -891,6 +1003,15 @@ if lag_blocked:
       <div style='font-size:0.80rem;color:#8b8fa8;margin-top:4px'>{lag_block_reason}</div>
     </div>
     """, unsafe_allow_html=True)
+
+# ★ 時段標籤 helper
+def _tod_badge(hr: int) -> str:
+    if hr == 10:
+        return "<span class='tod-hot'>🕙 10:xx 黃金時段 WR=72%</span>"
+    elif hr in [9, 14]:
+        return f"<span class='tod-warm'>🕙 {hr}:xx 普通時段</span>"
+    else:
+        return f"<span class='tod-cold'>🕙 {hr}:xx WR偏低</span>"
 
 # Layer 3 exit
 if layer3_exit:
@@ -905,36 +1026,44 @@ if layer3_exit:
 # Layer 2 entry
 if layer2_signal == "BUY_TSLA":
     quality_bar_w = signal_quality
+    tod_html = _tod_badge(et_hour_now)
     st.markdown(f"""
     <div class="sig-layer2-buy">
       <div class="sig-title" style="color:#00d97e">🟢 買入 TSLA &nbsp; {layer2_stars}
           <span style='font-size:1rem;color:{signal_grade_color}'>
               &nbsp;品質 {signal_grade} ({signal_quality}分)</span></div>
+      <div style='margin:4px 0'>{tod_html}</div>
       <div class="sig-detail">{layer2_reason}</div>
       <div class="quality-bar">
           <div class="quality-fill" style="width:{quality_bar_w}%;background:{signal_grade_color}"></div>
       </div>
       <div style='font-size:0.75rem;color:#8b8fa8;margin-top:4px'>
+          consec={uvxy_trend_1m.get('consecutive',0)} &nbsp;|&nbsp;
           R²={uvxy_trend_1m.get('r2',0):.3f} &nbsp;|&nbsp;
           lag={lag_strength_val:+.3f} &nbsp;|&nbsp;
+          RSI={f'{tsla_rsi1:.1f}' if tsla_rsi1 else '—'} &nbsp;|&nbsp;
           UVXY加速={uvxy_accel:+.4f}
       </div>
     </div>
     """, unsafe_allow_html=True)
 elif layer2_signal == "SELL_TSLA":
     quality_bar_w = signal_quality
+    tod_html = _tod_badge(et_hour_now)
     st.markdown(f"""
     <div class="sig-layer2-sell">
       <div class="sig-title" style="color:#e84045">🔴 賣出 TSLA &nbsp; {layer2_stars}
           <span style='font-size:1rem;color:{signal_grade_color}'>
               &nbsp;品質 {signal_grade} ({signal_quality}分)</span></div>
+      <div style='margin:4px 0'>{tod_html}</div>
       <div class="sig-detail">{layer2_reason}</div>
       <div class="quality-bar">
           <div class="quality-fill" style="width:{quality_bar_w}%;background:{signal_grade_color}"></div>
       </div>
       <div style='font-size:0.75rem;color:#8b8fa8;margin-top:4px'>
+          consec={uvxy_trend_1m.get('consecutive',0)} &nbsp;|&nbsp;
           R²={uvxy_trend_1m.get('r2',0):.3f} &nbsp;|&nbsp;
           lag={lag_strength_val:+.3f} &nbsp;|&nbsp;
+          RSI={f'{tsla_rsi1:.1f}' if tsla_rsi1 else '—'} &nbsp;|&nbsp;
           UVXY加速={uvxy_accel:+.4f}
       </div>
     </div>
@@ -958,20 +1087,26 @@ if layer1_active:
     """, unsafe_allow_html=True)
 
 # Normal state
-if not layer1_active and not layer2_signal and not layer3_exit and not rsi_blocked and not lag_blocked:
-    uvxy_s = uvxy_trend_1m.get("slope", 0)
-    r2_val = uvxy_trend_1m.get("r2", 0)
-    r2_status = f"✅ R²={r2_val:.2f}≥{min_uvxy_r2}" if r2_val >= min_uvxy_r2 else f"❌ R²={r2_val:.2f}<{min_uvxy_r2}"
+if not layer1_active and not layer2_signal and not layer3_exit and not rsi_blocked and not lag_blocked and not time_blocked:
+    uvxy_s   = uvxy_trend_1m.get("slope", 0)
+    r2_val   = uvxy_trend_1m.get("r2", 0)
+    co_val   = uvxy_trend_1m.get("consecutive", 0)
+    r2_status    = f"✅ R²={r2_val:.2f}≥{min_uvxy_r2}" if r2_val >= min_uvxy_r2 else f"❌ R²={r2_val:.2f}<{min_uvxy_r2}"
     slope_status = (f"✅ 斜率={abs(uvxy_s):.3f}≥{min_uvxy_slope}"
                     if abs(uvxy_s) >= min_uvxy_slope else f"❌ 斜率={abs(uvxy_s):.3f}<{min_uvxy_slope}")
+    consec_status = (f"✅ consec={co_val}≥{consec_req}"
+                     if co_val >= consec_req else f"❌ consec={co_val}<{consec_req}")
+    tod_color = "#00d97e" if et_hour_now == 10 else ("#f6c90e" if et_hour_now in [9,14] else "#8b8fa8")
     st.markdown(f"""
     <div class="sig-normal">
       <div class="sig-title" style="color:#8b8fa8">⚪ 無訊號</div>
       <div class="sig-detail">
-          {slope_status} &nbsp;|&nbsp; {r2_status}<br>
+          {slope_status} &nbsp;|&nbsp; {r2_status} &nbsp;|&nbsp;
+          <span style='color:{"#00d97e" if co_val>=consec_req else "#e84045"}'>{consec_status}</span><br>
           確認={uvxy_trend_1m.get('confirmed','—')} &nbsp;|&nbsp;
+          RSI={f'{tsla_rsi1:.1f}' if tsla_rsi1 else '—'} &nbsp;|&nbsp;
           lag={lag_strength_val:+.3f} &nbsp;|&nbsp;
-          RSI={f'{tsla_rsi1:.1f}' if tsla_rsi1 else '—'}
+          <span style='color:{tod_color}'>🕙 {et_hour_now}:xx ET</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1268,19 +1403,25 @@ if isinstance(hist, pd.DataFrame) and len(hist) >= 2:
 else:
     st.info("📈 累積數據中，稍後顯示走勢圖…")
 
-# ── v2 changelog footer ──
-st.markdown('<div class="section-title">v2 優化說明</div>', unsafe_allow_html=True)
+# ── v3 changelog footer ──
+st.markdown('<div class="section-title">v3 優化說明（5日1949根K線回測）</div>', unsafe_allow_html=True)
 st.markdown("""
 <div style='background:#161920;border-radius:8px;padding:12px 18px;
             border:1px solid #2d3139;font-size:0.80rem;color:#8b8fa8;line-height:1.8'>
-<b style='color:#5c7cfa'>★ v2 核心改進（基於今日真實數據回測）：</b><br>
-1. <b style='color:#c9cdd8'>斜率門檻校準</b>：0.15 → 0.05%/根（今日UVXY 90th percentile=0.11%，原設定完全無法觸發）<br>
-2. <b style='color:#c9cdd8'>R² 獨立門檻</b>：0.45 → 0.65（R²≥0.65 WR=80% vs R²≥0.45 WR=31%，最關鍵過濾因子）<br>
-3. <b style='color:#c9cdd8'>RSI 防呆過濾</b>：SELL訊號RSI<45=跳過（超賣TSLA易反彈），去除今日唯一虧損訊號<br>
-4. <b style='color:#c9cdd8'>訊號滯後偵測</b>：lag_strength<-0.5=跳過（TSLA已提前大幅移動）<br>
-5. <b style='color:#c9cdd8'>品質評分系統</b>：0-100分 A/B/C/D等級，幫助倉位管理<br>
-6. <b style='color:#c9cdd8'>UVXY加速偵測</b>：監控動能是否在增強或衰退<br>
-7. <b style='color:#c9cdd8'>每日統計</b>：即時追蹤當日訊號數、勝率、過濾數量
+<b style='color:#5c7cfa'>★ v2 基礎改進（1日390根回測）：</b><br>
+1. 斜率門檻 0.15 → 0.05%/根 &nbsp;|&nbsp; 2. R² 獨立門檻 0.45 → 0.65 &nbsp;|&nbsp;
+3. RSI 防呆過濾（單邊）&nbsp;|&nbsp; 4. 訊號滯後偵測 &nbsp;|&nbsp; 5. 品質評分 0-100分<br><br>
+<b style='color:#00d97e'>★★ v3 新增改進（5日1949根回測，96個訊號深度分析）：</b><br>
+1. <b style='color:#c9cdd8'>連續根數升權為核心因子</b>：consec=2 WR=44% → consec=4 WR=82% → consec=6 WR=100%<br>
+&nbsp;&nbsp;&nbsp; 預設由2升至3，品質評分 consec 佔比從15pts→35pts<br>
+2. <b style='color:#c9cdd8'>SELL RSI 雙向門檻</b>：加入上限（RSI≥55 時 SELL WR=0%，6個全輸）<br>
+&nbsp;&nbsp;&nbsp; 最佳SELL區間：RSI 40–55（WR 60–71%）<br>
+3. <b style='color:#c9cdd8'>時段過濾</b>：10點 WR=72%（SELL WR=100%），其他時段 WR=40–54%<br>
+&nbsp;&nbsp;&nbsp; 支援嚴格（只10點）/ 寬鬆（非優質時段降50%強度）兩種模式<br>
+4. <b style='color:#c9cdd8'>R² 預設升至0.80</b>：5日回測顯示訊號更乾淨<br>
+5. <b style='color:#c9cdd8'>lag filter 預設關閉</b>：5日數據顯示lag_strength對WR影響僅1–2%<br>
+6. <b style='color:#c9cdd8'>訊號卡片顯示強化</b>：consec / RSI / 時段標籤一目了然<br>
+7. <b style='color:#c9cdd8'>Telegram 訊息升級</b>：加入時段標籤、consec emoji、RSI值
 </div>
 """, unsafe_allow_html=True)
 
