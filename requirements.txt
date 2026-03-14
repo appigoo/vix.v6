@@ -6,4 +6,3 @@ plotly>=5.20.0
 requests>=2.31.0
 streamlit_autorefresh
 scipy
-pytz
