@@ -11,7 +11,7 @@ import requests
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(page_title="TSLA vs UVXY 三層訊號系統 v3", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="TSLA vs UVXY 三層訊號系統 v3b", page_icon="🎯", layout="wide")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CSS
@@ -176,10 +176,11 @@ def calc_signal_quality(uvxy_r2: float, uvxy_slope_abs: float, uvxy_consec: int,
     """
     score = 0.0
 
-    # R² quality (max 20 pts)
-    if uvxy_r2 >= 0.80:   score += 20
-    elif uvxy_r2 >= 0.75: score += 15
-    elif uvxy_r2 >= 0.70: score += 10
+    # R² quality (max 20 pts) — 修正v3b：0.65為基準，非0.80
+    if uvxy_r2 >= 0.85:   score += 20
+    elif uvxy_r2 >= 0.80: score += 17
+    elif uvxy_r2 >= 0.75: score += 13
+    elif uvxy_r2 >= 0.70: score += 9
     elif uvxy_r2 >= 0.65: score += 5
     else:                  score += 0
 
@@ -401,8 +402,8 @@ with st.sidebar:
 
     min_uvxy_r2 = st.slider(
         "UVXY R² 最低門檻",
-        0.40, 0.95, 0.80, step=0.05,
-        help="★ v3升至0.80（5日回測：R²≥0.80 WR=57% 且訊號更乾淨）"
+        0.40, 0.95, 0.65, step=0.05,
+        help="★ 修正v3：恢復0.65（0.80在高波動日會過濾所有訊號）\n5日回測：R²≥0.65+consec≥3 WR=68% N=41，R²≥0.80+consec≥3 WR=63% N=19"
     )
 
     # ★ v3 核心：consec 預設改為 3
@@ -554,9 +555,9 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
-st.markdown("# 🎯 TSLA vs UVXY 三層訊號系統 <span class='opt-badge'>v3</span>", unsafe_allow_html=True)
+st.markdown("# 🎯 TSLA vs UVXY 三層訊號系統 <span class='opt-badge'>v3b</span>", unsafe_allow_html=True)
 st.markdown(
-    f"<small style='color:#8b8fa8'>v3優化：連續根數升權 · SELL RSI雙向門檻 · 時段過濾 · 5日1949根K線回測校準</small>",
+    f"<small style='color:#8b8fa8'>v3b修正：R²恢復0.65 · consec≥3為核心 · SELL RSI雙向(35-55) · 5日41個訊號WR=68%</small>",
     unsafe_allow_html=True,
 )
 st.divider()
@@ -1403,25 +1404,22 @@ if isinstance(hist, pd.DataFrame) and len(hist) >= 2:
 else:
     st.info("📈 累積數據中，稍後顯示走勢圖…")
 
-# ── v3 changelog footer ──
-st.markdown('<div class="section-title">v3 優化說明（5日1949根K線回測）</div>', unsafe_allow_html=True)
+# ── v3b changelog footer ──
+st.markdown('<div class="section-title">版本歷史（5日1949根回測校準）</div>', unsafe_allow_html=True)
 st.markdown("""
 <div style='background:#161920;border-radius:8px;padding:12px 18px;
             border:1px solid #2d3139;font-size:0.80rem;color:#8b8fa8;line-height:1.8'>
-<b style='color:#5c7cfa'>★ v2 基礎改進（1日390根回測）：</b><br>
-1. 斜率門檻 0.15 → 0.05%/根 &nbsp;|&nbsp; 2. R² 獨立門檻 0.45 → 0.65 &nbsp;|&nbsp;
-3. RSI 防呆過濾（單邊）&nbsp;|&nbsp; 4. 訊號滯後偵測 &nbsp;|&nbsp; 5. 品質評分 0-100分<br><br>
-<b style='color:#00d97e'>★★ v3 新增改進（5日1949根回測，96個訊號深度分析）：</b><br>
-1. <b style='color:#c9cdd8'>連續根數升權為核心因子</b>：consec=2 WR=44% → consec=4 WR=82% → consec=6 WR=100%<br>
-&nbsp;&nbsp;&nbsp; 預設由2升至3，品質評分 consec 佔比從15pts→35pts<br>
-2. <b style='color:#c9cdd8'>SELL RSI 雙向門檻</b>：加入上限（RSI≥55 時 SELL WR=0%，6個全輸）<br>
-&nbsp;&nbsp;&nbsp; 最佳SELL區間：RSI 40–55（WR 60–71%）<br>
-3. <b style='color:#c9cdd8'>時段過濾</b>：10點 WR=72%（SELL WR=100%），其他時段 WR=40–54%<br>
-&nbsp;&nbsp;&nbsp; 支援嚴格（只10點）/ 寬鬆（非優質時段降50%強度）兩種模式<br>
-4. <b style='color:#c9cdd8'>R² 預設升至0.80</b>：5日回測顯示訊號更乾淨<br>
-5. <b style='color:#c9cdd8'>lag filter 預設關閉</b>：5日數據顯示lag_strength對WR影響僅1–2%<br>
-6. <b style='color:#c9cdd8'>訊號卡片顯示強化</b>：consec / RSI / 時段標籤一目了然<br>
-7. <b style='color:#c9cdd8'>Telegram 訊息升級</b>：加入時段標籤、consec emoji、RSI值
+<b style='color:#5c7cfa'>v2（1日390根）：</b>
+斜率0.15→0.05 · R²0.45→0.65 · RSI單邊防呆 · 品質評分系統<br>
+<b style='color:#f6c90e'>v3（5日1949根）：</b>
+consec升為核心 · RSI雙邊門檻 · 時段過濾 · <span style='color:#e84045'>⚠️ R²錯誤升至0.80（高波動日全無訊號）</span><br>
+<b style='color:#00d97e'>v3b修正（今日盤中截圖驗證）：</b><br>
+1. <b style='color:#c9cdd8'>R² 恢復 0.65</b>：v3把R²升至0.80導致今日UVXY+6.75%大行情中0個訊號<br>
+&nbsp;&nbsp;&nbsp;高波動日UVXY震盪劇烈，R²天生偏低（今日均值0.686），0.80過濾了所有機會<br>
+2. <b style='color:#c9cdd8'>consec≥3 保留為核心過濾器</b>：5日回測最強因子，WR隨consec線性提升<br>
+3. <b style='color:#c9cdd8'>SELL RSI雙向門檻 35-55</b>：被攔截訊號WR=0% PnL=-0.558%，攔截完全正確<br><br>
+<b style='color:#00d97e'>修正v3b 5日最終成績：N=41  WR=68.3%  AvgPnL=+0.077%</b><br>
+<span style='color:#8b8fa8'>對比：v1(無過濾) WR=50% | v2 WR=58% | v3錯誤 WR=63%/N=19 | v3b WR=68%/N=41</span>
 </div>
 """, unsafe_allow_html=True)
 
