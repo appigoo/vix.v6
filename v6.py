@@ -72,7 +72,7 @@ if tsla_df.empty or uvxy_df.empty:
     st.error("無法取得最新資料，請確認網路或美股交易時段")
     st.stop()
 
-# 強制移除 index name，避免 pandas join 時出現 "no overlapping index names" 錯誤
+# ──── 關鍵修正：移除 index name，避免 pandas 檢查名稱不一致而報錯 ──────
 tsla_df.index.name = None
 uvxy_df.index.name = None
 
@@ -126,7 +126,7 @@ tsla_recent = tsla_df.tail(n_candles)
 tsla_net_pct = (
     (tsla_recent['Close'].iloc[-1] - tsla_recent['Close'].iloc[0]) /
     tsla_recent['Close'].iloc[0] * 100
-    if len(tsla_recent) > 0 else 0
+    if len(tsla_recent) > 1 else 0
 )
 
 tsla_follow_expected = False
@@ -146,20 +146,20 @@ corr_hist = []
 common_idx = tsla_df.index.intersection(uvxy_df.index)
 
 if len(common_idx) >= 60:
-    prices_tsla = tsla_df.loc[common_idx, 'Close']
-    prices_uvxy = uvxy_df.loc[common_idx, 'Close']
-    
-    ret_tsla = prices_tsla.pct_change().dropna()
-    ret_uvxy = prices_uvxy.pct_change().dropna()
-    
-    min_len = min(len(ret_tsla), len(ret_uvxy))
-    ret_tsla = ret_tsla.iloc[-min_len:]
-    ret_uvxy = ret_uvxy.iloc[-min_len:]
-    
-    if len(ret_tsla) >= 60:
-        corr_series = ret_tsla.rolling(window=60).corr(ret_uvxy)
-        corr = corr_series.iloc[-1]
-        corr_hist = corr_series.tail(60).dropna().values.tolist()
+    try:
+        prices_tsla = tsla_df.loc[common_idx, 'Close'].dropna()
+        prices_uvxy = uvxy_df.loc[common_idx, 'Close'].dropna()
+        
+        ret_tsla = prices_tsla.pct_change().dropna()
+        ret_uvxy = prices_uvxy.pct_change().dropna()
+        
+        min_len = min(len(ret_tsla), len(ret_uvxy))
+        if min_len >= 60:
+            corr_series = ret_tsla.iloc[-min_len:].rolling(60).corr(ret_uvxy.iloc[-min_len:])
+            corr = corr_series.iloc[-1]
+            corr_hist = corr_series.tail(60).dropna().values.tolist()
+    except Exception as e:
+        st.warning(f"Pearson 計算失敗：{str(e)}")
 
 # ────────────────────────────────────────────────────────────────
 # Telegram 警報
