@@ -72,7 +72,7 @@ if tsla_df.empty or uvxy_df.empty:
     st.error("無法取得最新資料，請確認網路或美股交易時段")
     st.stop()
 
-# ──── 關鍵修正：移除 index name，避免 pandas 檢查名稱不一致而報錯 ──────
+# 關鍵防護：一開始就清除 index name，避免後續任何操作觸發名稱檢查
 tsla_df.index.name = None
 uvxy_df.index.name = None
 
@@ -84,11 +84,15 @@ uvxy_latest = uvxy_df.iloc[-1]
 # ────────────────────────────────────────────────────────────────
 def get_trend_strength(df, n, min_body_pct, big_candle_pct):
     recent = df.tail(n).copy()
+    
+    # 重要：每次 slice 後都強制清除 name，防止 boolean mask 內部對齊失敗
+    recent.index.name = None
+    
     recent['Body'] = abs(recent['Close'] - recent['Open'])
     recent['Pct'] = (recent['Close'] - recent['Open']) / recent['Open'] * 100
     recent['Direction'] = np.sign(recent['Pct'])
 
-    # 過濾小實體
+    # 過濾小實體 ── 這行曾經觸發錯誤，現在已安全
     valid = recent[recent['Body'] / recent['Open'] * 100 >= min_body_pct]
 
     if len(valid) == 0:
@@ -101,7 +105,7 @@ def get_trend_strength(df, n, min_body_pct, big_candle_pct):
     up_pct = up_count / total_valid * 100 if total_valid > 0 else 0
     down_pct = down_count / total_valid * 100 if total_valid > 0 else 0
 
-    # 大K線檢查（單根超過門檻視為強趨勢）
+    # 大K線檢查
     has_big_up = (recent['Pct'] >= big_candle_pct).any()
     has_big_down = (recent['Pct'] <= -big_candle_pct).any()
 
@@ -122,7 +126,9 @@ uvxy_trend, uvxy_strength, uvxy_forced_by_big = get_trend_strength(
 )
 
 # TSLA 是否跟隨
-tsla_recent = tsla_df.tail(n_candles)
+tsla_recent = tsla_df.tail(n_candles).copy()
+tsla_recent.index.name = None   # 再次防護
+
 tsla_net_pct = (
     (tsla_recent['Close'].iloc[-1] - tsla_recent['Close'].iloc[0]) /
     tsla_recent['Close'].iloc[0] * 100
@@ -222,8 +228,10 @@ if desync:
 # ────────────────────────────────────────────────────────────────
 # 雙 K 線圖
 # ────────────────────────────────────────────────────────────────
-last15_tsla = tsla_df.tail(15)
-last15_uvxy = uvxy_df.tail(15)
+last15_tsla = tsla_df.tail(15).copy()
+last15_tsla.index.name = None
+last15_uvxy = uvxy_df.tail(15).copy()
+last15_uvxy.index.name = None
 
 fig = make_subplots(
     rows=1, cols=2,
